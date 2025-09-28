@@ -79,7 +79,7 @@ func NewController(
 	)
 	keyFunc := controllerutils.MetaNamespaceKeyT[kyvernov2.CleanupPolicyInterface]
 	baseEnqueueFunc := controllerutils.LogError(logger, controllerutils.Parse(keyFunc, controllerutils.Queue(queue)))
-	enqueueFunc := func(logger logr.Logger, operation, kind string) controllerutils.EnqueueFuncT[kyvernov2.CleanupPolicyInterface] {
+	/*enqueueFunc := func(logger logr.Logger, operation, kind string) controllerutils.EnqueueFuncT[kyvernov2.CleanupPolicyInterface] {
 		logger = logger.WithValues("kind", kind, "operation", operation)
 		return func(obj kyvernov2.CleanupPolicyInterface) error {
 			logger := logger.WithValues("name", obj.GetName())
@@ -93,7 +93,7 @@ func NewController(
 			}
 			return nil
 		}
-	}
+	}*/
 	c := &controller{
 		client:        client,
 		kyvernoClient: kyvernoClient,
@@ -108,19 +108,39 @@ func NewController(
 		jp:            jp,
 		gctxStore:     gctxStore,
 	}
-	if _, err := controllerutils.AddEventHandlersT(
+	// Enqueue on add/delete; for updates, only enqueue when generation changes (ignore status-only updates)
+	baseEnqueue := controllerutils.LogError(logger, controllerutils.Parse(controllerutils.MetaNamespaceKey, controllerutils.Queue(queue)))
+	// ClusterCleanupPolicy handlers
+	if _, err := controllerutils.AddEventHandlers(
 		cpolInformer.Informer(),
-		controllerutils.AddFuncT(logger, enqueueFunc(logger, "added", "ClusterCleanupPolicy")),
-		controllerutils.UpdateFuncT(logger, enqueueFunc(logger, "updated", "ClusterCleanupPolicy")),
-		controllerutils.DeleteFuncT(logger, enqueueFunc(logger, "deleted", "ClusterCleanupPolicy")),
+		controllerutils.AddFunc(logger, baseEnqueue),
+		func(oldObj, obj interface{}) {
+			oldMeta := oldObj.(metav1.Object)
+			objMeta := obj.(metav1.Object)
+			if oldMeta.GetGeneration() != objMeta.GetGeneration() {
+				if err := baseEnqueue(obj); err != nil {
+					logger.Error(err, "failed to enqueue object", "obj", obj)
+				}
+			}
+		},
+		controllerutils.DeleteFunc(logger, baseEnqueue),
 	); err != nil {
 		logger.Error(err, "failed to register event handlers")
 	}
-	if _, err := controllerutils.AddEventHandlersT(
+	// CleanupPolicy handlers
+	if _, err := controllerutils.AddEventHandlers(
 		polInformer.Informer(),
-		controllerutils.AddFuncT(logger, enqueueFunc(logger, "added", "CleanupPolicy")),
-		controllerutils.UpdateFuncT(logger, enqueueFunc(logger, "updated", "CleanupPolicy")),
-		controllerutils.DeleteFuncT(logger, enqueueFunc(logger, "deleted", "CleanupPolicy")),
+		controllerutils.AddFunc(logger, baseEnqueue),
+		func(oldObj, obj interface{}) {
+			oldMeta := oldObj.(metav1.Object)
+			objMeta := obj.(metav1.Object)
+			if oldMeta.GetGeneration() != objMeta.GetGeneration() {
+				if err := baseEnqueue(obj); err != nil {
+					logger.Error(err, "failed to enqueue object", "obj", obj)
+				}
+			}
+		},
+		controllerutils.DeleteFunc(logger, baseEnqueue),
 	); err != nil {
 		logger.Error(err, "failed to register event handlers")
 	}
