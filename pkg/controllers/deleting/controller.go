@@ -102,25 +102,12 @@ func NewController(
 	if _, err := controllerutils.AddEventHandlersT(
 		polInformer.Informer(),
 		controllerutils.AddFuncT(logger, enqueueFunc(logger, "added", "DeletigPolicy")),
-		// On update, normalize backdated status and otherwise enqueue only on generation change
+		// On update, enqueue only when generation (spec) changes; skip status-only updates
 		func(oldObj, obj *v1alpha1.DeletingPolicy) {
-			// If generation didn't change, this is likely a status-only update
 			if oldObj.GetGeneration() == obj.GetGeneration() {
-				// If lastExecutionTime is significantly backdated, normalize it to now to prevent catch-up loops
-				if !obj.Status.LastExecutionTime.IsZero() && time.Since(obj.Status.LastExecutionTime.Time) >= time.Minute {
-					latest := obj.DeepCopy()
-					latest.Status.LastExecutionTime = metav1.Now()
-					if _, err := kyvernoClient.PoliciesV1alpha1().DeletingPolicies().UpdateStatus(context.Background(), latest, metav1.UpdateOptions{}); err != nil {
-						logger.Error(err, "failed to normalize lastExecutionTime")
-						// fallback: enqueue once if normalization fails
-						_ = enqueueFunc(logger, "updated", "DeletingPolicy")(obj)
-					}
-				}
-				// skip enqueue for status-only updates
 				return
 			}
-			// generation changed (spec update) -> enqueue
-			_ = enqueueFunc(logger, "updated", "DeletingPolicy")(obj)
+			_ = enqueueFunc(logger, "updated", "DeletigPolicy")(obj)
 		},
 		controllerutils.DeleteFuncT(logger, enqueueFunc(logger, "deleted", "DeletigPolicy")),
 	); err != nil {
