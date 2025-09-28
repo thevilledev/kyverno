@@ -239,7 +239,7 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 		if err != nil {
 			return err
 		}
-		if err := c.updateDeletingPolicyStatus(ctx, policy.Policy, *executionTime); err != nil {
+		if err := c.updateDeletingPolicyStatus(ctx, policy.Policy, time.Now()); err != nil {
 			logger.Error(err, "failed to update the cleanup policy status")
 			return err
 		}

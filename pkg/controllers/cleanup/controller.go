@@ -346,7 +346,7 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 			return err
 		}
 		// record the executed slot
-		if err := c.updateCleanupPolicyStatus(ctx, policy, namespace, *executionTime); err != nil {
+		if err := c.updateCleanupPolicyStatus(ctx, policy, namespace, time.Now()); err != nil {
 			logger.Error(err, "failed to update the cleanup policy status")
 			return err
 		}
