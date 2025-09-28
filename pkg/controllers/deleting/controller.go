@@ -237,7 +237,8 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 			logger.Error(err, "failed to update the cleanup policy status")
 			return err
 		}
-		nextExecutionTime, err = policy.Policy.GetNextExecutionTime(*executionTime)
+		// jump to the next future slot relative to now to avoid minute-by-minute catch-up
+		nextExecutionTime, err = policy.Policy.GetNextExecutionTime(time.Now())
 		if err != nil {
 			logger.Error(err, "failed to get the policy next execution time")
 			return err

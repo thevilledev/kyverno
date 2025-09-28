@@ -345,11 +345,13 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 		if err != nil {
 			return err
 		}
+		// record the executed slot
 		if err := c.updateCleanupPolicyStatus(ctx, policy, namespace, *executionTime); err != nil {
 			logger.Error(err, "failed to update the cleanup policy status")
 			return err
 		}
-		nextExecutionTime, err = policy.GetNextExecutionTime(*executionTime)
+		// jump to the next future slot relative to now to avoid minute-by-minute catch-up
+		nextExecutionTime, err = policy.GetNextExecutionTime(time.Now())
 		if err != nil {
 			logger.Error(err, "failed to get the policy next execution time")
 			return err
