@@ -102,7 +102,26 @@ func NewController(
 	if _, err := controllerutils.AddEventHandlersT(
 		polInformer.Informer(),
 		controllerutils.AddFuncT(logger, enqueueFunc(logger, "added", "DeletigPolicy")),
-		controllerutils.UpdateFuncT(logger, enqueueFunc(logger, "updated", "DeletigPolicy")),
+		// On update, normalize backdated status and otherwise enqueue only on generation change
+		func(oldObj, obj *v1alpha1.DeletingPolicy) {
+			// If generation didn't change, this is likely a status-only update
+			if oldObj.GetGeneration() == obj.GetGeneration() {
+				// If lastExecutionTime is significantly backdated, normalize it to now to prevent catch-up loops
+				if !obj.Status.LastExecutionTime.IsZero() && time.Since(obj.Status.LastExecutionTime.Time) >= time.Minute {
+					latest := obj.DeepCopy()
+					latest.Status.LastExecutionTime = metav1.Now()
+					if _, err := kyvernoClient.PoliciesV1alpha1().DeletingPolicies().UpdateStatus(context.Background(), latest, metav1.UpdateOptions{}); err != nil {
+						logger.Error(err, "failed to normalize lastExecutionTime")
+						// fallback: enqueue once if normalization fails
+						_ = enqueueFunc(logger, "updated", "DeletingPolicy")(obj)
+					}
+				}
+				// skip enqueue for status-only updates
+				return
+			}
+			// generation changed (spec update) -> enqueue
+			_ = enqueueFunc(logger, "updated", "DeletingPolicy")(obj)
+		},
 		controllerutils.DeleteFuncT(logger, enqueueFunc(logger, "deleted", "DeletigPolicy")),
 	); err != nil {
 		logger.Error(err, "failed to register event handlers")
@@ -237,8 +256,7 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 			logger.Error(err, "failed to update the cleanup policy status")
 			return err
 		}
-		// jump to the next future slot relative to now to avoid minute-by-minute catch-up
-		nextExecutionTime, err = policy.Policy.GetNextExecutionTime(time.Now())
+		nextExecutionTime, err = policy.Policy.GetNextExecutionTime(*executionTime)
 		if err != nil {
 			logger.Error(err, "failed to get the policy next execution time")
 			return err
