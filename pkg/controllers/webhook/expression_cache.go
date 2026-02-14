@@ -41,13 +41,20 @@ func (c *expressionCache) GetOrCompile(condition admissionregistrationv1.MatchCo
 		c.mu.RUnlock()
 		return cached
 	}
-	c.mu.RUnlock()
-
-	c.mu.RLock()
 	isPreexisting := c.preexistingExpressions[condition.Expression]
 	c.mu.RUnlock()
 
-	errors := compiler.CompileMatchConditionsWithKubernetesEnv([]admissionregistrationv1.MatchCondition{condition}, c.preexistingExpressions)
+	// Build a single-entry map instead of passing the live preexistingExpressions
+	// map to the compiler.  Without this, concurrent writes from AddExpression
+	// (called on informer goroutines) race with the compiler's map read at
+	// pkg/cel/compiler/matchconditions.go:validateMatchConditionsExpression,
+	// potentially causing a "concurrent map read and map write" panic.
+	//
+	// This is safe because the compiler only looks up the expression being
+	// compiled (one key per condition) and GetOrCompile always passes exactly
+	// one condition.
+	preexisting := map[string]bool{condition.Expression: isPreexisting}
+	errors := compiler.CompileMatchConditionsWithKubernetesEnv([]admissionregistrationv1.MatchCondition{condition}, preexisting)
 
 	compiled := &compiledExpression{
 		expression: condition.Expression,
@@ -114,12 +121,16 @@ func (c *expressionCache) InvalidateOnPolicyChange() {
 
 func (c *expressionCache) AddExpression(condition admissionregistrationv1.MatchCondition) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	c.preexistingExpressions[condition.Expression] = true
+	c.mu.Unlock()
 
+	// Compile outside the lock.  See the matching comment in GetOrCompile for
+	// why a single-entry map is passed instead of the live preexistingExpressions
+	// map.  The value is unconditionally true because we just registered the
+	// expression above.
+	preexisting := map[string]bool{condition.Expression: true}
 	hash := c.hashMatchCondition(condition)
-	errors := compiler.CompileMatchConditionsWithKubernetesEnv([]admissionregistrationv1.MatchCondition{condition}, c.preexistingExpressions)
+	errors := compiler.CompileMatchConditionsWithKubernetesEnv([]admissionregistrationv1.MatchCondition{condition}, preexisting)
 
 	compiled := &compiledExpression{
 		expression: condition.Expression,
@@ -130,7 +141,9 @@ func (c *expressionCache) AddExpression(condition admissionregistrationv1.MatchC
 		isStored:   true,
 	}
 
+	c.mu.Lock()
 	c.cache[hash] = compiled
+	c.mu.Unlock()
 }
 
 func (c *expressionCache) RemoveExpression(condition admissionregistrationv1.MatchCondition) {
